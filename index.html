@@ -90,97 +90,196 @@
         <!-- Input field for the Lichess username -->
         <label for="username">Enter Lichess Username:</label>
         <input type="text" id="username" placeholder="Enter username here" required>
-
-        <!-- Button to fetch today's games -->
-        <button onclick="fetchTodaysGames()">Fetch Today's Games</button>
-
+    
+        <!-- Input fields for the starting rating and milestone rating -->
+        <label for="start-rating">Enter Starting Rating:</label>
+        <input type="text" id="start-rating" placeholder="e.g., 1000" required>
+    
+        <label for="milestone-rating">Enter Milestone Rating:</label>
+        <input type="text" id="milestone-rating" placeholder="e.g., 1500" required>
+    
+        <!-- Button to fetch today's games and check milestone -->
+        <button onclick="fetchTodaysGames()">Fetch Today's Games and Check Milestone</button>
+    
         <!-- Placeholder to display results -->
         <div id="result"></div>
     </div>
-
+    
     <script>
-        async function fetchTodaysGames() {
-            const username = document.getElementById('username').value;
-            const resultDiv = document.getElementById('result');
+       async function fetchTodaysGames() {
+    const username = document.getElementById('username').value;
+    const startRating = parseInt(document.getElementById('start-rating').value);
+    const milestoneRating = parseInt(document.getElementById('milestone-rating').value);
+    const resultDiv = document.getElementById('result');
 
-            if (!username) {
-                resultDiv.innerHTML = '<p class="error">Please enter a Lichess username!</p>';
-                return;
+    if (!username || isNaN(startRating) || isNaN(milestoneRating)) {
+        resultDiv.innerHTML = '<p class="error">Please enter a valid username and ratings!</p>';
+        return;
+    }
+
+    const today = new Date();
+    const year = today.getUTCFullYear();
+    const month = (today.getUTCMonth() + 1).toString().padStart(2, '0');
+    const day = today.getUTCDate().toString().padStart(2, '0');
+
+    try {
+        resultDiv.innerHTML = '<p>Fetching games...</p>';
+        const response = await fetch(`https://lichess.org/api/games/user/${username}`);
+        const data = await response.text(); // Lichess returns games in PGN format
+
+        // Use a regex to capture each game in its entirety
+        const games = data.trim().match(/(\[Event.*?\n(?:.*\n)*?\n.*?)(?=\n\n|\z)/g);
+
+        if (!games) {
+            resultDiv.innerHTML = '<p class="error">No games found.</p>';
+            return;
+        }
+
+        // Filter games that match today's date
+        const todaysGames = games.filter(game => game.includes(`[Date "${year}.${month}.${day}"]`));
+
+        if (todaysGames.length > 0) {
+            const totalTimePlayed = calculateTotalTimePlayed(todaysGames);
+            resultDiv.innerHTML = `<p class="success">Total games played today: ${todaysGames.length}</p>
+                                   <p class="success">Total time played today: ${totalTimePlayed}</p>`;
+        } else {
+            resultDiv.innerHTML = '<p class="error">No games played today.</p>';
+        }
+
+        // Check the milestone rating achievement
+        const milestoneMessage = await checkMilestone(username, startRating, milestoneRating);
+        resultDiv.innerHTML += `<p class="success">${milestoneMessage}</p>`;
+    } catch (error) {
+        console.error('Error fetching games:', error);
+        resultDiv.innerHTML = '<p class="error">Error fetching games. Please try again later.</p>';
+    }
+}
+    
+        // Function to check for rating milestone achievements using Lichess API
+        async function checkMilestone(username, startRating, milestoneRating) {
+    const response = await fetch(`https://lichess.org/api/user/${username}/rating-history`);
+    const data = await response.json();
+
+    // Change 'Rapid' if needed, or use 'Classical'/'Blitz' depending on your preference
+    const rapidData = data.find(category => category.name === 'Rapid');
+    if (rapidData) {
+        let startDate = null;
+        let milestoneDate = null;
+
+        // Loop through all rating entries to find the range duration
+        for (const ratingEntry of rapidData.points) {
+            const [year, month, day, rating] = ratingEntry;
+            const currentDate = new Date(year, month - 1, day);
+
+            // Mark when the starting rating is first reached or exceeded
+            if (rating >= startRating && !startDate) {
+                startDate = currentDate;
             }
 
-            const today = new Date();
-            const year = today.getUTCFullYear();
-            const month = (today.getUTCMonth() + 1).toString().padStart(2, '0');
-            const day = today.getUTCDate().toString().padStart(2, '0');
-
-            try {
-                resultDiv.innerHTML = '<p>Fetching games...</p>';
-                const response = await fetch(`https://lichess.org/api/games/user/${username}`);
-                const data = await response.text(); // Lichess returns games in PGN format
-
-                // Use a regex to capture each game in its entirety
-                const games = data.trim().match(/(\[Event.*?\n(?:.*\n)*?\n.*?)(?=\n\n|\z)/g);
-
-                if (!games) {
-                    resultDiv.innerHTML = '<p class="error">No games found.</p>';
-                    return;
-                }
-
-                // Filter games that match today's date
-                const todaysGames = games.filter(game => game.includes(`[Date "${year}.${month}.${day}"]`));
-
-                if (todaysGames.length > 0) {
-                    const totalTimePlayed = calculateTotalTimePlayed(todaysGames);
-                    resultDiv.innerHTML = `<p class="success">Total games played today: ${todaysGames.length}</p>
-                                           <p class="success">Total time played today: ${totalTimePlayed}</p>`;
-                } else {
-                    resultDiv.innerHTML = '<p class="error">No games played today.</p>';
-                }
-            } catch (error) {
-                console.error('Error fetching games:', error);
-                resultDiv.innerHTML = '<p class="error">Error fetching games. Please try again later.</p>';
+            // Mark when the milestone rating is reached or exceeded
+            if (rating >= milestoneRating && startDate) {
+                milestoneDate = currentDate;
+                break; // Stop once we reach the milestone
             }
         }
 
+        if (startDate && milestoneDate) {
+            // Calculate the time difference between start and milestone ratings
+            const duration = calculateDateDifference(startDate, milestoneDate);
+            return `Time taken to go from ${startRating} to ${milestoneRating}: ${duration}`;
+        } else if (!startDate) {
+            return `Starting rating of ${startRating} was not reached.`;
+        } else {
+            return `Milestone rating of ${milestoneRating} was not reached after reaching ${startRating}.`;
+        }
+    }
+    return `Rating data for Rapid not found.`;
+}
+
+// Helper function to calculate the difference between two dates in a readable format
+function calculateDateDifference(startDate, endDate) {
+    const diffTime = Math.abs(endDate - startDate);
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); // Convert milliseconds to days
+    const months = Math.floor(diffDays / 30);
+    const days = diffDays % 30;
+
+    return `${months} month(s) and ${days} day(s)`;
+}
+
+// Helper function to calculate the difference between two dates in a readable format
+function calculateDateDifference(startDate, endDate) {
+    const diffTime = Math.abs(endDate - startDate);
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); // Convert milliseconds to days
+    const months = Math.floor(diffDays / 30);
+    const days = diffDays % 30;
+
+    return `${months} month(s) and ${days} day(s)`;
+}
+
+        // Function to accurately calculate the difference in months and days
+        function calculateDateDifference(startDate, endDate) {
+            const startYear = startDate.getUTCFullYear();
+            const startMonth = startDate.getUTCMonth();
+            const startDay = startDate.getUTCDate();
+    
+            const endYear = endDate.getUTCFullYear();
+            const endMonth = endDate.getUTCMonth();
+            const endDay = endDate.getUTCDate();
+    
+            // Calculate the difference in months and adjust for days
+            let yearDiff = endYear - startYear;
+            let monthDiff = endMonth - startMonth + (yearDiff * 12);
+            let dayDiff = endDay - startDay;
+    
+            if (dayDiff < 0) {
+                monthDiff -= 1;
+                dayDiff += new Date(endYear, endMonth, 0).getDate(); // Get days in the previous month
+            }
+    
+            return `${monthDiff} months and ${dayDiff} days`;
+        }
+    
         function calculateTotalTimePlayed(games) {
             let totalTimeInSeconds = 0;
-
+    
             games.forEach(game => {
                 const timeControlMatch = game.match(/\[TimeControl "(.*?)"\]/);
                 const movesMatch = game.match(/1\.\s([^\n]*)/g); // Match the moves starting with "1."
-
+    
                 if (timeControlMatch && movesMatch) {
                     const timeControl = timeControlMatch[1].split('+');
                     const baseTime = parseInt(timeControl[0]); // Base time in seconds
                     const increment = parseInt(timeControl[1]); // Increment in seconds
-
+    
                     // Split the movesMatch by spaces or any other delimiter to get individual moves
                     const movesString = movesMatch[0]; // Get the first match which contains all moves
                     const individualMoves = movesString.split(/(\d+\.\s)/).filter(Boolean); // Split by move numbers and filter empty strings
-
+    
                     // Filter out move numbers and keep only the moves
                     const actualMoves = individualMoves.filter((move, index) => index % 2 !== 0); // Keep only the moves, not the numbers
                     const moveCount = actualMoves.length;
-
+    
                     // Calculate total time for this game
                     const totalIncrement = (moveCount * increment);
                     const totalGameTime = baseTime + totalIncrement;
-
+    
                     totalTimeInSeconds += totalGameTime;
                 }
             });
-
+    
             return formatTime(totalTimeInSeconds);
         }
-
+    
         function formatTime(totalSeconds) {
             const hours = Math.floor(totalSeconds / 3600).toString().padStart(2, '0');
             const minutes = Math.floor((totalSeconds % 3600) / 60).toString().padStart(2, '0');
             const seconds = Math.floor(totalSeconds % 60).toString().padStart(2, '0');
-
+    
             return `${hours}:${minutes}:${seconds}`;
         }
     </script>
+    
+    
 
 </body>
 
